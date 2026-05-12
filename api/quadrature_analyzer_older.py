@@ -1,9 +1,5 @@
-# quadrature_analyzer_fixed.py
-# Fixed version: all _integrate_* helpers and recommend_usage() snippets now use
-# the correct public APIs of chebyshev, hermite, laguerre, legendre modules.
+# quadrature_analyzer.py
 from __future__ import annotations
-import os
-import sys
 import math
 from dataclasses import dataclass, field
 from enum import Enum
@@ -780,8 +776,9 @@ class QuadratureAnalyzer:
         """
         Return a ready-to-copy Python snippet using the recommended family.
 
-        FIXED (API alignment): generates code that uses the actual public methods
-        of each quadrature module instead of non-existent methods.
+        Fixed: uses interval_a/interval_b from the analysis (actual integration bounds)
+        instead of singularity locations. The previous version used singularities[0][location]
+        as the lower bound, which is wrong for smooth functions and ignored the actual interval.
         """
         fam = analysis.recommended_family
         n_max = analysis.suggested_max_n
@@ -790,28 +787,25 @@ class QuadratureAnalyzer:
         b_val = self._fmt_val(analysis.interval_b)
 
         if fam == PolynomialFamily.LEGENDRE:
-            # FIX: LegendreQuadrature.integrate() integrates over [-1, 1].
-            # Generate code that transforms [a,b] -> [-1,1] manually.
             return (
                 f"# Recommended: Gauss-Legendre on [{analysis.original_expr}]\n"
                 f"from legendre import LegendreQuadrature\n"
                 f"import numpy as np\n\n"
-                f"a, b = {a_val}, {b_val}\n"
                 f"quad = LegendreQuadrature(n={n_max}, use_mpmath=False)\n"
-                f"# Transform from [{a_val}, {b_val}] to [-1, 1]: x_orig = scale*x + shift\n"
-                f"scale, shift = (b - a) / 2.0, (b + a) / 2.0\n"
-                f"result = float(quad.integrate(lambda {var}: ({analysis.original_expr})) * scale\n"
+                f"result = quad.integrate_transformed(\n"
+                f"    lambda {var}: {analysis.original_expr},\n"
+                f"    a={a_val}, b={b_val},\n"
+                f"    nodes=quad.nodes, weights=quad.weights\n"
+                f")\n"
             )
         elif fam == PolynomialFamily.CHEBYSHEV:
-            # FIX: Use clencurt_integrate_interval which handles [a,b] mapping natively.
             return (
-                f"# Recommended: Clenshaw-Curtis on [{analysis.original_expr}]\n"
-                f"from chebyshev import clencurt_integrate_interval\n"
+                f"# Recommended: Gauss-Chebyshev or Clenshaw-Curtis\n"
+                f"from chebyshev import ChebyshevQuadrature\n"
                 f"import numpy as np\n\n"
-                f"a, b = {a_val}, {b_val}\n"
-                f"result = clencurt_integrate_interval(\n"
-                f"    lambda {var}: {analysis.original_expr},\n"
-                f"    a=a, b=b, n={n_max}\n"
+                f"q = ChebyshevQuadrature()\n"
+                f"result = q.gauss_chebyshev_quadrature(\n"
+                f"    lambda {var}: {analysis.original_expr}, n={n_max}\n"
                 f")\n"
             )
         elif fam == PolynomialFamily.HERMITE:
@@ -889,6 +883,10 @@ class QuadratureAnalyzer:
             if fam == PolynomialFamily.LEGENDRE:
                 value = self._integrate_legendre(func, analysis.interval_a, analysis.interval_b, n)
             elif fam == PolynomialFamily.CHEBYSHEV:
+                '''
+                value = self._integrate_chebyshev(func, analysis.interval_a, analysis.interval_b, n,
+                                                  has_endpoint_singularity=analysis.has_endpoint_singularity)
+                '''
                 value = self._integrate_chebyshev(func, expr, variable,
                                                   analysis.interval_a, analysis.interval_b, n,
                                                   has_endpoint_singularity=analysis.has_endpoint_singularity)
@@ -897,18 +895,12 @@ class QuadratureAnalyzer:
             else:  # LAGUERRE
                 value = self._integrate_laguerre(expr, variable, n)
         except ImportError as e:
-            import traceback
-            print(f"DEBUG ImportError at n={n}: {e}")
-            traceback.print_exc()
             return QuadratureResult(
                 value=float("nan"), family_used=fam, n_nodes=n,
                 converged=False, error_estimate=None,
                 message="Cannot import OrthoPolyB_np_mp module: " + str(e) + ". Make sure the quadrature modules are in your PYTHONPATH.",
             )
         except Exception as e:
-            import traceback
-            print(f"DEBUG Exception at n={n}: {e}")
-            traceback.print_exc()
             return QuadratureResult(
                 value=float("nan"), family_used=fam, n_nodes=n,
                 converged=False, error_estimate=None,
@@ -986,45 +978,34 @@ class QuadratureAnalyzer:
         v = Symbol(variable)
         return lambdify(v, expr, modules="numpy")
 
-    # ====================================================================
-    # FIX 1: _integrate_legendre
-    # OLD: called non-existent quad.integrate_transformed(func, a=a, b=b, ...)
-    # NEW: LegendreQuadrature.integrate() works on [-1,1]. Transform [a,b]->[-1,1]
-    #      manually and multiply by Jacobian (b-a)/2.
-    # ====================================================================
     def _integrate_legendre(self, func, a: float, b: float, n: int) -> float:
         """Integrate using Gauss-Legendre via OrthoPolyB_np_mp. Returns the integral value."""
         from legendre import LegendreQuadrature
-        scale = (b - a) / 2.0
-        shift = (b + a) / 2.0
         quad = LegendreQuadrature(n=n, use_mpmath=False)
-        # Transform: integral_a^b f(x) dx = scale * integral_{-1}^{1} f(scale*t+shift) dt
-        transformed = lambda t: func(scale * t + shift)
-        result = quad.integrate(transformed)
-        return float(result) * scale
+        result = quad.integrate_transformed(func, 
+                                            a=a, 
+                                            b=b,
+                                            nodes=quad.nodes, 
+                                            weights=quad.weights,
+                                            )
+        return float(result)
 
-    # ====================================================================
-    # FIX 2: _integrate_chebyshev
-    # OLD singularity path: called non-existent q.gauss_chebyshev_quadrature(stripped, n=n)
-    # NEW singularity path: use q.clenshaw_curtis_quadrature(stripped, n=n)
-    #
-    # OLD non-singularity path: manual mapping + clencurt_quadrature(mapped, n) * scale
-    # NEW non-singularity path: use clencurt_integrate_interval(func, a, b, n) directly
-    # ====================================================================
+    # BEGIN OP46
     def _integrate_chebyshev(self, func, expr, variable, a, b, n,
                              has_endpoint_singularity=False):
-        from chebyshev import clencurt_integrate_interval, ChebyshevQuadrature
+        from chebyshev import clencurt_quadrature, ChebyshevQuadrature
         if has_endpoint_singularity:
             from sympy import sqrt, Symbol, lambdify
             v = Symbol(variable)
             weight = 1 / sqrt(1 - v**2)
             stripped = lambdify(v, (expr / weight).simplify(), modules="numpy")
             q = ChebyshevQuadrature()
-            # FIX: use clenshaw_curtis_quadrature instead of gauss_chebyshev_quadrature
-            return float(q.clenshaw_curtis_quadrature(stripped, n=n))
+            return float(q.gauss_chebyshev_quadrature(stripped, n=n))
         else:
-            # FIX: use clencurt_integrate_interval which handles [a,b] mapping with Jacobian
-            return float(clencurt_integrate_interval(func, a, b, n))
+            scale = (b - a) / 2.0
+            shift = (b + a) / 2.0
+            mapped = lambda x: func(scale * x + shift)
+            return float(clencurt_quadrature(mapped, n) * scale)
 
     def _integrate_hermite(self, expr, variable: str, n: int,
                            use_mpmath: bool = False) -> float:
@@ -1045,21 +1026,15 @@ class QuadratureAnalyzer:
         quad = GaussHermiteQuadrature(n=n, use_mpmath=use_mpmath)
         return float(quad.integrate(stripped))
 
-    # ====================================================================
-    # FIX 3: _integrate_laguerre
-    # OLD: from laguerre import gauss_quadrature_weights; nodes, weights = ...
-    #      PROBLEM: gauss_quadrature_weights(n) returns ONLY weights (not a tuple).
-    # NEW: Use LaguerreQuadrature class with .integrate() method.
-    # ====================================================================
     def _integrate_laguerre(self, expr, variable, n):
         from sympy import exp, Symbol, lambdify
         v = Symbol(variable)
         weight = exp(-v)
         stripped = lambdify(v, (expr / weight).simplify(), modules="numpy")
-        # FIX: use LaguerreQuadrature class instead of gauss_quadrature_weights
-        from laguerre import LaguerreQuadrature
-        quad = LaguerreQuadrature(n=n, alpha=0.0, use_mpmath=False)
-        return float(quad.integrate(stripped))
+        from laguerre import gauss_quadrature_weights
+        nodes, weights = gauss_quadrature_weights(n)
+        return float(np.sum(weights * stripped(nodes)))
+    # END OP46
 
 # ---------------------------------------------------------------------------
 #  Demo / self-test
@@ -1067,13 +1042,6 @@ class QuadratureAnalyzer:
 
 
 if __name__ == "__main__":
-    # FIX: Ensure project root is on sys.path so that 'from legendre import ...' works.
-    # When running as a script, Python adds the script's directory (api/) to sys.path[0],
-    # but the quadrature modules live in the parent directory.
-    _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if _project_root not in sys.path:
-        sys.path.insert(0, _project_root)
-
     analyzer = QuadratureAnalyzer()
 
     examples = [
@@ -1138,4 +1106,5 @@ if __name__ == "__main__":
         for uline in usage.strip().splitlines():
             print(f"    {uline}")
 
-
+    print(f"\n{'=' * 70}")
+    print("  Done.")
