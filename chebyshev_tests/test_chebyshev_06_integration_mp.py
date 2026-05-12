@@ -67,14 +67,16 @@ res32 = float(quad32.integrate(f_typeI))
 _all_pass &= _pass_fail("n=32 result within 1e-14 of π", abs(res32 - math.pi) < 1e-14)
 
 # ── Nodes are in (-1, 1) and sorted ascending ────────────────────────
-nodes = quad32.nodes
+#nodes = quad32.nodes
+nodes = quad32._nodes
 _all_pass &= _pass_fail("Nodes sorted ascending", all(nodes[i] < nodes[i+1] for i in range(len(nodes)-1)))
 _all_pass &= _pass_fail("All nodes in (-1, 1)", all(-1 < x < 1 for x in nodes))
 
 # ── All weights equal π/n for Type I (identical regardless of sort) ──
 with mp.workdps(80):
     expected_w = mp.pi / 32
-weights_ok = all(abs(w - expected_w) < mp.mpf("1e-70") for w in quad32.weights)
+# weights_ok = all(abs(w - expected_w) < mp.mpf("1e-70") for w in quad32.weights)
+weights_ok = all(abs(w - expected_w) < mp.mpf("1e-70") for w in quad32._weights)
 _all_pass &= _pass_fail(f"All weights ≈ π/32", weights_ok)
 
 
