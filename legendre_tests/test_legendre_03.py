@@ -3,7 +3,16 @@
 Demonstrates fast evaluation, derivative/integral coefficients, vectorized batch
 processing, and cached coefficient generation for Legendre polynomials.
 """
+from __future__ import annotations
+
+# import math
+import sys
 import numpy as np
+# import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 from legendre.numerical import LegendrePolynomial, LegendreGenerator
 
 

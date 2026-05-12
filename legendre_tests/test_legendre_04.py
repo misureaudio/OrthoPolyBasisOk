@@ -3,9 +3,16 @@
 Demonstrates Gauss-Legendre quadrature via Golub-Welsch and Newton-Raphson,
 precision-aware LegendreQuadrature, HighPrecisionGaussLegendre, and convenience functions.
 """
+from __future__ import annotations
+
 import math
+import sys
 import numpy as np
 import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 from legendre.integration import (
     GaussLegendreQuadrature,
     LegendreQuadrature,

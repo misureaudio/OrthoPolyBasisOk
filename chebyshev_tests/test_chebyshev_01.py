@@ -3,6 +3,17 @@
 Demonstrates exact symbolic expressions, coefficient extraction, evaluation,
 derivative, and basis generation for Chebyshev-T polynomials.
 """
+
+from __future__ import annotations
+
+import math
+import sys
+import numpy as np
+import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 import sympy as sp
 from chebyshev.symbolic import ChebyshevSymbolic, chebyshev_symbolic_basis
 

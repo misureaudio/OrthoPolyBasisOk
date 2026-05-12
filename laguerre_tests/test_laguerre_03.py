@@ -1,5 +1,15 @@
-from laguerre.numerical import LaguerrePolynomial, GeneralizedLaguerrePolynomial
+from __future__ import annotations
+
+import math
+import sys
 import numpy as np
+import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
+from laguerre.numerical import LaguerrePolynomial, GeneralizedLaguerrePolynomial
+# import numpy as np
 
 # ─── Standard Laguerre L_5(x) at x = 2.0 ───────────────────────────────
 L5 = LaguerrePolynomial(5)

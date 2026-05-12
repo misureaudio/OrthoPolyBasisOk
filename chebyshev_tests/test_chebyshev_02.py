@@ -3,7 +3,18 @@
 Demonstrates arbitrary-precision evaluation, differentiation, integration,
 and coefficient extraction for Chebyshev-T polynomials.
 """
+
+from __future__ import annotations
+
+import math
+import sys
+import numpy as np
 import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
+# import mpmath as mp
 from chebyshev.high_precision import ChebyshevMPMath, get_mpmath_chebyshev_basis
 
 

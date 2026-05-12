@@ -1,5 +1,15 @@
 """Chebyshev-T Layer 3 — Numerical (NumPy) Pretty-Printed Tests."""
 
+from __future__ import annotations
+
+import math
+import sys
+import numpy as np
+import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 from chebyshev.numerical import (
     ChebyshevPolynomial,
     ChebyshevGenerator,
@@ -9,7 +19,7 @@ from chebyshev.numerical import (
     generate_numpy_chebyshev,
     get_numpy_chebyshev_basis,
 )
-import numpy as np
+# import numpy as np
 
 # ── Header ───────────────────────────────────────────────────────────
 print("=" * 72)

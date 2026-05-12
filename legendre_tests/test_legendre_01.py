@@ -1,4 +1,15 @@
+from __future__ import annotations
+
+# import math
+import sys
+# import numpy as np
+# import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 import sympy as sp
+
 from legendre.symbolic import LegendreSymbolic, legendre_symbolic_basis
 
 # Single polynomial

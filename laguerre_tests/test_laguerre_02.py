@@ -1,5 +1,15 @@
-from laguerre.high_precision import LaguerreMPMath
+from __future__ import annotations
+
+import math
+import sys
+import numpy as np
 import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
+from laguerre.high_precision import LaguerreMPMath
+# import mpmath as mp
 
 # Create a high-precision Laguerre polynomial L_20^(1.5) with 80 decimal places
 L20 = LaguerreMPMath(20, alpha=1.5, dps=80)

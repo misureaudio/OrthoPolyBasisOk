@@ -3,8 +3,16 @@
 Compares double-precision vs mpmath-assisted node computation for large n,
 demonstrating stability improvements when use_mpmath=True.
 """
+from __future__ import annotations
+
 import math
+import sys
 import numpy as np
+# import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 from legendre.integration import LegendreQuadrature
 
 

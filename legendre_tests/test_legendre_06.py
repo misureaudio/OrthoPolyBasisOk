@@ -4,8 +4,16 @@ Demonstrates true arbitrary-precision integration where nodes, weights, and the
 integrand are all mpmath mpf objects. Shows convergence of digit accuracy as n
 and dps increase.
 """
-import math
+from __future__ import annotations
+
+# import math
+import sys
+# import numpy as np
 import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
 from legendre.integration import HighPrecisionGaussLegendre, gauss_legendre_high_precision
 
 

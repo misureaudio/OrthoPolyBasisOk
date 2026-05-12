@@ -1,5 +1,15 @@
-from laguerre.integration import LaguerreQuadrature, function_projection
+from __future__ import annotations
+
+import math
+import sys
 import numpy as np
+import mpmath as mp
+
+# Ensure the package root is on the path
+sys.path.insert(0, "..")
+
+from laguerre.integration import LaguerreQuadrature, function_projection
+# import numpy as np
 
 # ─── Gauss-Laguerre: ∫₀^∞ f(x) e^{-x} dx ──────────────────────────────
 ql = LaguerreQuadrature(32, alpha=0.0)
