@@ -29,7 +29,9 @@ import requests
 # ---------------------------------------------------------------------------
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # from quadrature_analyzer import QuadratureAnalyzer
-from quadrature_analyzer_hermite_improved import QuadratureAnalyzer
+# from quadrature_analyzer_hermite_improved import QuadratureAnalyzer
+# from quadrature_analyzer_laguerre_fixed import QuadratureAnalyzer
+from quadrature_analyzer_d_adapted import QuadratureAnalyzer
 
 # Configurable API URL (env var overrides default)
 API_URL = os.environ.get("QUADRATURE_API_URL", "http://localhost:8000")
