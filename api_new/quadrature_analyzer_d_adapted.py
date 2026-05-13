@@ -626,6 +626,22 @@ class QuadratureAnalyzer:
         if analysis.is_periodic_on_interval:
             lo = max(8, lo // 2)
             hi = max(32, hi // 2)
+
+        # CATEGORY B FIX: inflate hi based on oscillation frequency.
+        # Trigonometric functions are classified as "bounded" derivative growth
+        # (derivatives cycle), so without this check they always get hi=32
+        # regardless of whether the integrand has 1 or 100 cycles on the interval.
+        if not (np.isinf(analysis.interval_a) or np.isinf(analysis.interval_b)):
+            omega_max = self._estimate_max_oscillation_frequency(
+                analysis.sympy_expr, analysis.variable,
+                analysis.interval_a, analysis.interval_b
+            )
+            if omega_max > 1e-6:
+                interval_width = abs(analysis.interval_b - analysis.interval_a)
+                n_half_periods = omega_max * interval_width / math.pi
+                min_osc_nodes = int(10 * n_half_periods)
+                hi = max(hi, min(min_osc_nodes, 500))
+
         return (lo, hi)
 
     @staticmethod
@@ -676,6 +692,18 @@ class QuadratureAnalyzer:
 
         if n is None:
             n = analysis.suggested_max_n
+
+        # CATEGORY B FIX (Layer 2): safety net — ensure n is sufficient for oscillation
+        # frequency even when caller passes an explicit low n. This catches cases where
+        # someone calls execute_quadrature(n=16) on sin(100*x).
+        a, b = analysis.interval_a, analysis.interval_b
+        if not (np.isinf(a) or np.isinf(b)):
+            osc_safe_n = self._compute_oscillation_safe_n(
+                self._parse(expression, variable), variable, a, b, n
+            )
+            if osc_safe_n > n:
+                print(f"DEBUG execute_quadrature: oscillation-aware bump n={n} -> {osc_safe_n}")
+                n = osc_safe_n
 
         v = Symbol(variable)
         expr = self._parse(expression, variable)
@@ -737,7 +765,10 @@ class QuadratureAnalyzer:
                 message="Initial quadrature returned NaN at n=" + str(n),
             )
 
-        n2 = min(n * 2, 200)
+        # CATEGORY B FIX: when oscillation-aware bump raised n above 100, the old
+        # cap of 200 would make n2 < n (e.g., n=381 -> n2=min(762,200)=200), which
+        # breaks convergence checking. Use adaptive cap: at least n*2, up to 1000.
+        n2 = min(n * 2, 1000)
 
         try:
             if fam == PolynomialFamily.LEGENDRE:
