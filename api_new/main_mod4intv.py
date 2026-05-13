@@ -195,14 +195,19 @@ async def analyze_function(req: AnalysisRequest):
 @app.post("/integrate")
 async def integrate_function(req: IntegrationRequest):
     try:
-        # If n is not provided, analyze first to get suggested min_n
+        # If n is not provided, analyze first to get suggested max_n.
+        # IMPORTANT: must use suggested_max_n (not min_n) to match the direct
+        # backend path in execute_quadrature() which defaults to suggested_max_n.
+        # Using min_n here causes Category A convergence boundary failures where
+        # Direct and API compute with different node counts, producing mismatched
+        # values or divergent convergence flags at tol=1e-12 thresholds.
         if req.n is None:
             analysis = analyzer.analyze(
                 req.expression,
                 interval=req.interval,
                 variable=req.variable
             )
-            n = analysis.suggested_min_n
+            n = analysis.suggested_max_n
         else:
             n = req.n
 
