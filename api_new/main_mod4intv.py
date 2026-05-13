@@ -12,7 +12,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # from quadrature_analyzer import QuadratureAnalyzer, PolynomialFamily
 # from quadrature_analyzer_hermite_improved import QuadratureAnalyzer, PolynomialFamily
 # from quadrature_analyzer_laguerre_fixed import QuadratureAnalyzer, PolynomialFamily
-from quadrature_analyzer_d_adapted import QuadratureAnalyzer, PolynomialFamily
+# from quadrature_analyzer_d_adapted import QuadratureAnalyzer, PolynomialFamily
+from quadrature_analyzer_d_adapted_v2 import QuadratureAnalyzer, PolynomialFamily
 
 """
 Done — main_mod4intv.py is ready and compiles clean. Here's what changed:
