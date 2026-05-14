@@ -693,7 +693,270 @@ class QuadratureAnalyzer:
             return (f"# Recommended: Gauss-Laguerre on [0, +inf)\n"
                     f"from laguerre import LaguerreQuadrature\n"
                     f"quad = LaguerreQuadrature(n={n_max}, alpha=0.0, use_mpmath=False)\n")
+    '''
+    def execute_quadrature(
+        self,
+        expression,
+        interval=None,
+        *,
+        variable: str = "x",
+        n: Optional[int] = None,
+        tol: float = 1e-12,
+        use_mpmath: bool = False,
+    ) -> QuadratureResult:
+        analysis = self.analyze(expression, interval=interval, variable=variable)
+        fam = analysis.recommended_family
 
+        if n is None:
+            n = analysis.suggested_max_n
+
+        # CATEGORY B FIX (Layer 2): safety net — ensure n is sufficient for oscillation
+        # frequency even when caller passes an explicit low n. This catches cases where
+        # someone calls execute_quadrature(n=16) on sin(100*x).
+        a, b = analysis.interval_a, analysis.interval_b
+        if not (np.isinf(a) or np.isinf(b)):
+            osc_safe_n = self._compute_oscillation_safe_n(
+                self._parse(expression, variable), variable, a, b, n
+            )
+            if osc_safe_n > n:
+                print(f"DEBUG execute_quadrature: oscillation-aware bump n={n} -> {osc_safe_n}")
+                n = osc_safe_n
+
+        v = Symbol(variable)
+        expr = self._parse(expression, variable)
+        try:
+            func = self._sympy_to_numpy(expr, variable)
+        except Exception as e:
+            return QuadratureResult(
+                value=float("nan"), family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Failed to convert expression to numpy callable: " + str(e),
+            )
+
+        # CATEGORY C FIX: When algebraic endpoint singularities are detected on a finite
+        # interval, use Gauss-Jacobi quadrature instead of the standard family. This
+        # restores exponential convergence for integrands like (1-x^2)^(-0.3)*exp(0.3x).
+        use_jacobi = (analysis.has_algebraic_endpoint_singularity
+                      and analysis.interval_type == "finite")
+
+        if use_jacobi:
+            print(f"DEBUG execute_quadrature: CATEGORY C — algebraic endpoint singularity detected, "
+                  f"using Gauss-Jacobi with alpha={analysis.left_singularity_alpha:.4f}, "
+                  f"beta={analysis.right_singularity_beta:.4f}")
+
+        try:
+            if use_jacobi:
+                # CATEGORY C: Gauss-Jacobi quadrature with weight-matched singularities
+                value = self._integrate_with_jacobi_weight(
+                    expr, variable, n,
+                    analysis.interval_a, analysis.interval_b,
+                    analysis.left_singularity_alpha,
+                    analysis.right_singularity_beta,
+                )
+            elif fam == PolynomialFamily.LEGENDRE:
+                value = self._integrate_legendre(func, analysis.interval_a, analysis.interval_b, n)
+            elif fam == PolynomialFamily.CHEBYSHEV:
+                value = self._integrate_chebyshev(func, expr, variable,
+                                                  analysis.interval_a, analysis.interval_b, n,
+                                                  has_endpoint_singularity=analysis.has_endpoint_singularity)
+            elif fam == PolynomialFamily.HERMITE:
+                value = self._integrate_hermite(expr, variable, n, use_mpmath)
+            else:  # LAGUERRE
+                value = self._integrate_laguerre(expr, variable, n)
+        except ImportError as e:
+            return QuadratureResult(
+                value=float("nan"), family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Cannot import module: " + str(e),
+            )
+        except ValueError as e:
+            msg = str(e)
+            if "Gauss-Hermite will diverge" in msg and fam == PolynomialFamily.HERMITE:
+                L = self._compute_effective_support(expr, variable)
+                try:
+                    value = self._integrate_legendre(func, -L, L, min(n * 2, 200))
+                except Exception as fb_err:
+                    return QuadratureResult(
+                        value=float("nan"), family_used=fam, n_nodes=n,
+                        converged=False, error_estimate=None,
+                        message="Hermite divergence + Legendre fallback failed: " + str(fb_err),
+                    )
+            else:
+                raise
+        except Exception as e:
+            import traceback
+            print(f"DEBUG Exception at n={n}: {e}")
+            traceback.print_exc()
+            return QuadratureResult(
+                value=float("nan"), family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Quadrature computation failed: " + str(e),
+            )
+
+        value_n = float(value)
+        if not math.isfinite(value_n):
+            return QuadratureResult(
+                value=value_n, family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Initial quadrature returned NaN at n=" + str(n),
+            )
+
+        # CATEGORY B FIX: when oscillation-aware bump raised n above 100, the old
+        # cap of 200 would make n2 < n (e.g., n=381 -> n2=min(762,200)=200), which
+        # breaks convergence checking. Use adaptive cap: at least n*2, up to 1000.
+        n2 = min(n * 2, 1000)
+
+        try:
+            if use_jacobi:
+                # CATEGORY C: Gauss-Jacobi convergence check at 2n nodes
+                value_2n = self._integrate_with_jacobi_weight(
+                    expr, variable, n2,
+                    analysis.interval_a, analysis.interval_b,
+                    analysis.left_singularity_alpha,
+                    analysis.right_singularity_beta,
+                )
+            elif fam == PolynomialFamily.LEGENDRE:
+                value_2n = self._integrate_legendre(func, analysis.interval_a, analysis.interval_b, n2)
+            elif fam == PolynomialFamily.CHEBYSHEV:
+                value_2n = self._integrate_chebyshev(func, expr, variable,
+                                                     analysis.interval_a, analysis.interval_b, n2,
+                                                     has_endpoint_singularity=analysis.has_endpoint_singularity)
+            elif fam == PolynomialFamily.HERMITE:
+                value_2n = self._integrate_hermite(expr, variable, n2, use_mpmath)
+            else:
+                value_2n = self._integrate_laguerre(expr, variable, n2)
+        except Exception as e:
+            print(f"DEBUG n2 failed: {e}")
+            return QuadratureResult(
+                value=value_n, family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Convergence check failed at n=" + str(n2),
+            )
+
+        value_2n = float(value_2n)
+        if not math.isfinite(value_2n):
+            return QuadratureResult(
+                value=value_n, family_used=fam, n_nodes=n,
+                converged=False, error_estimate=None,
+                message="Quadrature at 2n returned NaN",
+            )
+
+        err = abs(value_2n - value_n)
+        rel_err = err / (abs(value_n) + 1e-30)
+        converged = (err < tol) or (rel_err < tol)
+        print(f"DEBUG: n={n}, n2={n2}, err={err:.3e}, rel_err={rel_err:.3e}, tol={tol}")
+        return QuadratureResult(
+            value=value_2n if converged else value_n,
+            family_used=fam,
+            n_nodes=n2 if converged else n,
+            converged=converged,
+            error_estimate=err,
+            message="Converged" if converged else "Did not converge within tol=" + str(tol),
+        )
+    '''
+    '''
+    def execute_quadrature(
+        self,
+        expression,
+        interval=None,
+        *,
+        variable: str = "x",
+        n: Optional[int] = None,
+        tol: float = 1e-12,
+        use_mpmath: bool = False,
+    ) -> QuadratureResult:
+        # 1. Setup basic variables immediately to avoid UnboundLocalError
+        v = Symbol(variable)
+        expr = self._parse(expression, variable)
+        
+        # 2. Perform Analysis
+        analysis = self.analyze(expression, interval=interval, variable=variable)
+        fam = analysis.recommended_family
+        if n is None:
+            n = analysis.suggested_max_n
+
+        # 3. Restore Category C Detection (Endpoint Singularities)
+        # We re-run this specifically for finite intervals to see if we should use Jacobi
+        left_alpha, right_beta = 0.0, 0.0
+        use_jacobi = False
+        if analysis.interval_type == "finite":
+            # Only attempt Jacobi if we suspect singularities
+            if analysis.has_endpoint_singularity:
+                exp_data = self._extract_endpoint_singularity_exponents(expr, current_a, current_b)
+                left_alpha = exp_data.get("left", 0.0)
+                right_beta = exp_data.get("right", 0.0)
+                use_jacobi = (left_alpha > 0 or right_beta > 0)
+
+        # 4. Handle Infinite Legendre Windowing
+        current_a, current_b = analysis.interval_a, analysis.interval_b
+        if np.isinf(current_a) or np.isinf(current_b):
+            if fam == PolynomialFamily.LEGENDRE:
+                L = self._compute_effective_support(expr, variable)
+                current_a = -L if np.isinf(current_a) else current_a
+                current_b = L if np.isinf(current_b) else current_b
+                print(f"DEBUG: Infinite Legendre fallback window: [{current_a}, {current_b}]")
+
+        # 5. Oscillation safety bump
+        if not (np.isinf(current_a) or np.isinf(current_b)):
+            osc_safe_n = self._compute_oscillation_safe_n(expr, variable, current_a, current_b, n)
+            if osc_safe_n > n:
+                print(f"DEBUG: Oscillation bump n={n} -> {osc_safe_n}")
+                n = osc_safe_n
+
+        # 6. Lambda conversion
+        try:
+            func = self._sympy_to_numpy(expr, variable)
+        except Exception as e:
+            return QuadratureResult(value=float("nan"), family_used=fam, n_nodes=n, converged=False, message=str(e))
+
+        # 7. Execute Quadrature (using adjusted current_a/b)
+        try:
+            if use_jacobi:
+                value = self._integrate_with_jacobi_weight(expr, variable, n, current_a, current_b, left_alpha, right_beta)
+            elif fam == PolynomialFamily.LEGENDRE:
+                value = self._integrate_legendre(func, current_a, current_b, n)
+            elif fam == PolynomialFamily.CHEBYSHEV:
+                value = self._integrate_chebyshev(func, expr, variable, current_a, current_b, n, 
+                                                  has_endpoint_singularity=analysis.has_endpoint_singularity)
+            elif fam == PolynomialFamily.HERMITE:
+                value = self._integrate_hermite(expr, variable, n, use_mpmath)
+            else:
+                value = self._integrate_laguerre(expr, variable, n)
+        except Exception as e:
+            return QuadratureResult(value=float("nan"), family_used=fam, n_nodes=n, converged=False, message=str(e))
+
+        # 8. Convergence Check (using 2n)
+        value_n = float(value)
+        n2 = min(n * 2, 1000)
+        try:
+            if use_jacobi:
+                value_2n = self._integrate_with_jacobi_weight(expr, variable, n2, current_a, current_b, left_alpha, right_beta)
+            elif fam == PolynomialFamily.LEGENDRE:
+                value_2n = self._integrate_legendre(func, current_a, current_b, n2)
+            elif fam == PolynomialFamily.CHEBYSHEV:
+                value_2n = self._integrate_chebyshev(func, expr, variable, current_a, current_b, n2, 
+                                                     has_endpoint_singularity=analysis.has_endpoint_singularity)
+            elif fam == PolynomialFamily.HERMITE:
+                value_2n = self._integrate_hermite(expr, variable, n2, use_mpmath)
+            else:
+                value_2n = self._integrate_laguerre(expr, variable, n2)
+            
+            value_2n = float(value_2n)
+            err = abs(value_2n - value_n)
+            rel_err = err / (abs(value_n) + 1e-30)
+            converged = (err < tol) or (rel_err < tol)
+            
+            return QuadratureResult(
+                value=value_2n if converged else value_n,
+                family_used=fam,
+                n_nodes=n2 if converged else n,
+                converged=converged,
+                error_estimate=err,
+                message="Converged" if converged else f"Tol not met (err={err:.2e})"
+            )
+        except Exception:
+            return QuadratureResult(value=value_n, family_used=fam, n_nodes=n, converged=False, message="Check at 2n failed")
+    '''
     def execute_quadrature(
         self,
         expression,
@@ -775,13 +1038,6 @@ class QuadratureAnalyzer:
         # 8. Convergence check at 2n
         value_n = float(value)
         n2 = min(n * 2, 1000)
-
-        # BEGIN GEMINI 3 MOD for mpmath
-        if use_mpmath:
-            # Arbitrary precision Golub-Welsch is extremely slow for N > 150
-            n2 = min(n * 2, 150)
-        # END GEMINI 3 MOD for mpmath
-        
         try:
             if use_jacobi:
                 value_2n = self._integrate_with_jacobi_weight(expr, variable, n2, current_a, current_b, left_alpha, right_beta)
@@ -1140,6 +1396,112 @@ class QuadratureAnalyzer:
             func_stripped = lambdify(v, g_expr_clean, modules="math")
             
         return self._integrate_jacobi(func_stripped, r_beta, l_alpha, n, a, b)
+
+    # ====================================================================
+    # CATEGORY C FIX: _integrate_jacobi() — NEW HELPER
+    # Gauss-Jacobi quadrature using scipy.special.roots_jacobi.
+    # Integrates g(x) * (1-x)^alpha * (1+x)^beta on [-1, 1].
+    # ====================================================================
+    '''
+    def _integrate_jacobi(self, func_stripped, alpha: float, beta: float,
+                          n: int, a: float = -1.0, b: float = 1.0) -> float:
+        """Integrate g(x)*(b-x)^alpha*(x-a)^beta using Gauss-Jacobi quadrature.
+
+        The standard Jacobi weight on [-1,1] is (1-t)^alpha_j*(1+t)^beta_j.
+        We map [a,b] to [-1,1] via t = 2*x/(b-a) - (b+a)/(b-a).
+
+        Parameters:
+            func_stripped: numpy callable for g(x), i.e., f(x) / [(b-x)^alpha*(x-a)^beta]
+            alpha: exponent of singularity at right endpoint b (0 < alpha < 1)
+            beta: exponent of singularity at left endpoint a (0 < beta < 1)
+            n: number of quadrature nodes
+            a, b: integration interval
+
+        Returns the integral value as float.
+        """
+        from scipy.special import roots_jacobi
+
+        # CRITICAL: The singularity exponent alpha means f(x) ~ (b-x)^(-alpha).
+        # Gauss-Jacobi with parameter alpha_j integrates against w(t)=(1-t)^alpha_j.
+        # We need alpha_j = -alpha so that w(t) = (1-t)^(-alpha) matches the singularity.
+        # roots_jacobi requires alpha_j > -1, which is satisfied since 0 < alpha < 1 => -1 < -alpha < 0.
+
+        alpha_j = -alpha   # Jacobi parameter: negative of singularity exponent
+        beta_j = -beta     # Jacobi parameter: negative of singularity exponent
+
+        nodes_t, weights = roots_jacobi(n, alpha_j, beta_j)
+
+        scale = (b - a) / 2.0
+        shift = (b + a) / 2.0
+
+        # When mapping [a,b] -> [-1,1], the singular weight factors transform:
+        #   (x-a)^(-beta) = [scale*(t+1)]^(-beta) = scale^(-beta)*(t+1)^(-beta)
+        #   (b-x)^(-alpha) = [scale*(1-t)]^(-alpha) = scale^(-alpha)*(1-t)^(-alpha)
+        # Combined with dx = scale*dt: total factor = scale^(1-alpha-beta)
+        weight_scale = scale ** (1.0 - alpha - beta)
+
+        total = 0.0
+        for t_node, w in zip(nodes_t, weights):
+            x_node = scale * float(t_node) + shift
+            try:
+                val = func_stripped(x_node)
+                if math.isfinite(val):
+                    total += w * val
+            except Exception:
+                pass
+
+        return float(total) * weight_scale
+    '''
+    # ====================================================================
+    # CATEGORY C FIX: _integrate_with_jacobi_weight() — PUBLIC ENTRY POINT
+    # Strips the singular weight from f(x), then calls _integrate_jacobi.
+    # ====================================================================
+    '''
+    def _integrate_with_jacobi_weight(self, expr, variable: str, n: int,
+                                       a: float, b: float,
+                                       left_alpha: float, right_beta: float) -> float:
+        """Integrate f(x) on [a,b] using Gauss-Jacobi with detected singularity exponents.
+
+        Decomposes f(x) = g(x) * (x-a)^(-left_alpha) * (b-x)^(-right_beta),
+        then integrates g(x) against the Jacobi weight w(t) = (1-t)^right_beta*(1+t)^left_alpha
+        on [-1, 1] after mapping [a,b] -> [-1,1].
+
+        The full integral is:
+          int_a^b f(x) dx = int_{-1}^{1} g(x(t)) * w_Jacobi(t) * (b-a)/2 dt
+
+        where x(t) = ((b-a)*t + (a+b))/2.
+
+        Parameters:
+            expr: sympy expression for the full integrand f(x)
+            variable: integration variable name
+            n: number of quadrature nodes
+            a, b: integration interval endpoints
+            left_alpha: singularity exponent at x=a (0 < alpha < 1)
+            right_beta: singularity exponent at x=b (0 < beta < 1)
+
+        Returns the integral value as float.
+        """
+        from sympy import Symbol, lambdify
+
+        v = Symbol(variable)
+
+        # Build the weight factor: (x-a)^(-left_alpha) * (b-x)^(-right_beta)
+        # The "stripped" function g(x) = f(x) / [(x-a)^(-left_alpha)*(b-x)^(-right_beta)]
+        #                                = f(x) * (x-a)^left_alpha * (b-x)^right_beta
+        weight_factor = (v - a)**left_alpha * (b - v)**right_beta
+        g_expr = expr * weight_factor
+
+        # Create numpy callable for the stripped function g(x)
+        try:
+            func_stripped = lambdify(v, g_expr, modules="numpy")
+        except Exception as e:
+            print(f"DEBUG _integrate_with_jacobi_weight: lambdify failed ({e}), "
+                  f"falling back to direct Jacobi with original function")
+            # Fallback: use the original function directly (less accurate but won't crash)
+            func_stripped = lambdify(v, expr, modules="numpy")
+
+        return self._integrate_jacobi(func_stripped, right_beta, left_alpha, n, a, b)
+    '''
     
     def _integrate_laguerre(self, expr, variable: str, n: int) -> float:
         from sympy import exp, Symbol, lambdify

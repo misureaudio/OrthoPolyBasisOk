@@ -775,13 +775,6 @@ class QuadratureAnalyzer:
         # 8. Convergence check at 2n
         value_n = float(value)
         n2 = min(n * 2, 1000)
-
-        # BEGIN GEMINI 3 MOD for mpmath
-        if use_mpmath:
-            # Arbitrary precision Golub-Welsch is extremely slow for N > 150
-            n2 = min(n * 2, 150)
-        # END GEMINI 3 MOD for mpmath
-        
         try:
             if use_jacobi:
                 value_2n = self._integrate_with_jacobi_weight(expr, variable, n2, current_a, current_b, left_alpha, right_beta)
